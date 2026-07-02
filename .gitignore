@@ -1,0 +1,12 @@
+# Secrets — never commit
+.env
+
+# Local Python
+__pycache__/
+*.pyc
+.venv/
+
+# NOTE: db/citations.db is intentionally NOT ignored. In the GitHub Actions
+# deployment the committed database IS the durable store — it carries the
+# week-over-week history the trend line depends on. output/dashboard.html is
+# likewise committed so Netlify can serve it.

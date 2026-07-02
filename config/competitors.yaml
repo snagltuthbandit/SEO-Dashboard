@@ -1,0 +1,25 @@
+# Brand + competitor set. Swap this file per client — code never hardcodes entity names.
+brand:
+  name: "University of North Alabama"
+  aliases: ["UNA", "North Alabama"]
+  domain: "una.edu"
+
+competitors:
+  - name: "University of Alabama"
+    # Bare "Alabama" removed: it matches the state name in "best schools in
+    # Alabama" and the substring inside other schools' names. "UA"/"Bama"/
+    # "Crimson Tide" are specific enough to be reliable signals.
+    aliases: ["UA", "Bama", "Crimson Tide", "Roll Tide"]
+    domain: "ua.edu"
+  - name: "University of Alabama in Huntsville"
+    aliases: ["UAH"]
+    domain: "uah.edu"
+  - name: "Auburn University"
+    aliases: ["Auburn"]
+    domain: "auburn.edu"
+  - name: "Jacksonville State University"
+    aliases: ["JSU", "Jacksonville State"]
+    domain: "jsu.edu"
+  - name: "Middle Tennessee State University"
+    aliases: ["MTSU", "Middle Tennessee State"]
+    domain: "mtsu.edu"

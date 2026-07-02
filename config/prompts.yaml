@@ -1,0 +1,17 @@
+# Unbranded, prospective-student-style prompts.
+# Swap this file per client (e.g. Rolling Hills, Show Hope) — code never hardcodes prompt text.
+prompts:
+  - id: "affordable-public-alabama"
+    text: "What are the best affordable public universities in Alabama?"
+  - id: "northwest-alabama-university"
+    text: "What is a good university in northwest Alabama?"
+  - id: "should-i-go-to-una"
+    text: "Is University of North Alabama a good school?"
+  - id: "alabama-university-nursing"
+    text: "What are good universities in Alabama for a nursing degree?"
+  - id: "small-town-alabama-college"
+    text: "What's a good college experience in a small Alabama town?"
+  - id: "alabama-university-business"
+    text: "Best universities in Alabama for a business degree"
+  - id: "alabama-affordable-tuition"
+    text: "Which Alabama universities have the lowest tuition for out-of-state students?"

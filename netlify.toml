@@ -1,0 +1,11 @@
+# Netlify serves the pre-generated static dashboard. No build step — the HTML
+# is produced by the GitHub Actions collector and committed to the repo.
+[build]
+  publish = "output"
+  command = ""
+
+# Serve the dashboard at the site root (file is dashboard.html).
+[[redirects]]
+  from = "/"
+  to = "/dashboard.html"
+  status = 200
