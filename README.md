@@ -85,6 +85,39 @@ retarget prompts or competitors.
 - Multi-client dashboard support
 - Email/Slack digest delivery
 
+## Deployment (GitHub Actions + Netlify, free)
+
+The dashboard is a static HTML file, so hosting is free. Collection runs
+weekly in GitHub Actions; Netlify serves the generated `output/dashboard.html`.
+**Netlify only ever receives the static HTML — API keys and the raw response
+DB never leave the private repo.**
+
+Moving parts:
+
+- `.github/workflows/weekly.yml` — weekly cron (Mon ~06:00 Central). Runs the
+  collector, then commits the updated `db/citations.db` + `output/dashboard.html`
+  back to the repo. Only triggers on schedule / manual dispatch, so its own
+  commit can't re-trigger it.
+- `netlify.toml` — publishes `output/`, serves `dashboard.html` at the site root.
+- `db/citations.db` is committed (not gitignored): in this deployment the repo
+  is the durable store for the week-over-week trend history.
+
+**One-time setup:**
+
+1. **Create a private GitHub repo** on the 5by5 account, then push:
+   ```bash
+   git remote add origin git@github.com:<org>/una-citation-tracker.git
+   git branch -M main && git push -u origin main
+   ```
+2. **Add API keys** as repo secrets (Settings → Secrets and variables →
+   Actions): `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`. To enable more engines,
+   add `OPENAI_API_KEY` / `PERPLEXITY_API_KEY` and extend the `--engines` line
+   in `weekly.yml`.
+3. **Connect Netlify** (Add new site → Import from Git → pick the repo).
+   `netlify.toml` is auto-detected; no build command needed.
+4. **Test the loop**: Actions tab → "Weekly citation run" → Run workflow. This
+   collects, commits, and triggers a Netlify deploy without waiting for Monday.
+
 ## Re-pointing at a new client
 
 1. Copy `config/prompts.yaml` and `config/competitors.yaml`, edit for the
