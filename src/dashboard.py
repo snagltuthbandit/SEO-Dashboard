@@ -27,7 +27,7 @@ def _fetch_all(conn):
     return [dict(row) for row in rows]
 
 
-def build_data(conn, brand_name: str) -> dict:
+def build_data(conn, brand_name: str, entity_order: list, brand_terms: list) -> dict:
     rows = _fetch_all(conn)
     run_dates = sorted(set(r["run_date"] for r in rows))
 
@@ -64,36 +64,38 @@ def build_data(conn, brand_name: str) -> dict:
             series.append(rate)
         trend_series[engine] = series
 
-    # --- share of voice: total mention_count per entity, latest run_date ---
-    sov_rows = [r for r in rows if r["run_date"] == this_week] if this_week else []
-    sov_totals = {}
-    entity_order = []
-    for r in sov_rows:
-        if r["entity_name"] not in sov_totals:
-            sov_totals[r["entity_name"]] = 0
-            entity_order.append(r["entity_name"])
-        sov_totals[r["entity_name"]] += r["mention_count"]
-
-    # --- prompt-level table: brand mentions for latest run_date ---
-    table_rows = []
-    for r in sov_rows:
-        if r["entity_name"] != brand_name:
-            continue
-        table_rows.append(
-            {
-                "prompt_id": r["prompt_id"],
-                "prompt_text": r["prompt_text"],
-                "engine": r["engine"],
-                "mentioned": "Y" if r["mentioned"] else "N",
+    # --- per-run detail: one entry per (prompt, engine), with every entity's
+    # mention record nested. This is the pivot the client uses for the entity
+    # switcher, the gap view, and both share-of-voice modes. ---
+    runs_detail = {}
+    for rd in run_dates:
+        # group this run's rows by (prompt_id, engine)
+        by_pe = {}
+        for r in rows:
+            if r["run_date"] != rd:
+                continue
+            key = (r["prompt_id"], r["engine"])
+            if key not in by_pe:
+                by_pe[key] = {
+                    "prompt_id": r["prompt_id"],
+                    "prompt_text": r["prompt_text"],
+                    "engine": r["engine"],
+                    "raw_response": r["raw_response"],
+                    "mentions": {},
+                }
+            by_pe[key]["mentions"][r["entity_name"]] = {
+                "mentioned": r["mentioned"],
                 "position": r["position"],
-                "recommended": "Y" if r["is_recommended"] else "N",
+                "is_recommended": r["is_recommended"],
                 "mention_count": r["mention_count"],
-                "raw_response": r["raw_response"],
             }
-        )
+        runs_detail[rd] = list(by_pe.values())
 
     return {
         "brand_name": brand_name,
+        "brand_terms": brand_terms,
+        "entities": entity_order,
+        "run_dates": run_dates,
         "headline": {
             "this_week": this_week,
             "prior_week": prior_week,
@@ -102,11 +104,7 @@ def build_data(conn, brand_name: str) -> dict:
             "delta": delta,
         },
         "trend": {"dates": run_dates, "series": trend_series},
-        "share_of_voice": {
-            "labels": entity_order,
-            "counts": [sov_totals[e] for e in entity_order],
-        },
-        "prompt_table": table_rows,
+        "runs": runs_detail,
         "has_data": len(rows) > 0,
     }
 
@@ -129,6 +127,8 @@ HTML_TEMPLATE = """<!doctype html>
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 24px; }
   .card { background: #fff; border: 1px solid #e2e4e8; border-radius: 10px; padding: 20px; }
   .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #666; margin: 0 0 12px; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .card-head h2 { margin: 0; }
   .headline-number { font-size: 42px; font-weight: 700; line-height: 1; }
   .headline-delta { font-size: 15px; margin-top: 8px; }
   .up { color: #1a7f37; }
@@ -140,17 +140,29 @@ HTML_TEMPLATE = """<!doctype html>
   th:hover { background: #f0f1f3; }
   tr.data-row { cursor: pointer; }
   tr.data-row:hover { background: #f9fafb; }
-  tr.detail-row td { background: #fbfbfc; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 14px; max-height: 400px; overflow-y: auto; }
+  tr.detail-row td { background: #fbfbfc; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 14px; max-height: 400px; overflow-y: auto; cursor: default; }
+  tr.detail-row mark { background: #fff3ba; padding: 0 1px; border-radius: 2px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
   .badge.yes { background: #dafbe1; color: #1a7f37; }
   .badge.no { background: #f0f1f3; color: #666; }
-  .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .badge.pos-first { background: #dafbe1; color: #1a7f37; }
+  .badge.pos-early { background: #e8f5e0; color: #3f7f2f; }
+  .badge.pos-mid { background: #fff3ba; color: #8a6d00; }
+  .badge.pos-late { background: #fbe0d0; color: #9a4a1a; }
+  .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   select, input[type=text] { padding: 6px 10px; border: 1px solid #d0d2d6; border-radius: 6px; font-size: 13px; }
+  button.btn { padding: 6px 12px; border: 1px solid #d0d2d6; border-radius: 6px; font-size: 13px; background: #fff; cursor: pointer; }
+  button.btn:hover { background: #f0f1f3; }
+  .toggle { display: inline-flex; border: 1px solid #d0d2d6; border-radius: 6px; overflow: hidden; font-size: 12px; }
+  .toggle button { border: 0; background: #fff; padding: 5px 10px; cursor: pointer; color: #444; }
+  .toggle button.active { background: #2563eb; color: #fff; }
   .full-width { grid-column: 1 / -1; }
   .empty-state { color: #888; font-size: 14px; padding: 20px 0; }
+  .table-note { color: #8a6d00; background: #fff8e1; border: 1px solid #f3e2a0; border-radius: 6px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
   canvas { max-height: 280px; }
   .baseline-note { color: #666; font-size: 14px; line-height: 1.5; padding: 40px 8px; text-align: center; }
   .baseline-big { font-size: 18px; font-weight: 600; color: #1c1e21; margin-bottom: 8px; }
+  .spacer { flex: 1; }
 </style>
 </head>
 <body>
@@ -179,14 +191,22 @@ HTML_TEMPLATE = """<!doctype html>
       </div>
     </div>
     <div class="card">
-      <h2>Share of voice (this run, mention count)</h2>
+      <div class="card-head">
+        <h2>Share of voice</h2>
+        <div class="toggle" id="sov-toggle">
+          <button data-mode="count" class="active">Mention count</button>
+          <button data-mode="weighted">Visibility score</button>
+        </div>
+      </div>
       <canvas id="sov-chart"></canvas>
     </div>
   </div>
 
   <div class="card full-width">
-    <h2>Prompt-level detail — __BRAND_NAME__ (this run)</h2>
+    <h2 id="table-title">Prompt-level detail</h2>
     <div class="controls">
+      <select id="filter-date" title="Run date"></select>
+      <select id="filter-view" title="Entity / view"></select>
       <select id="filter-engine"><option value="">All engines</option></select>
       <select id="filter-mentioned">
         <option value="">Mentioned: all</option>
@@ -194,18 +214,12 @@ HTML_TEMPLATE = """<!doctype html>
         <option value="N">Mentioned: No</option>
       </select>
       <input type="text" id="filter-text" placeholder="Filter by prompt text...">
+      <span class="spacer"></span>
+      <button class="btn" id="export-csv">Export CSV</button>
     </div>
+    <div id="table-note" class="table-note" style="display:none;"></div>
     <table id="prompt-table">
-      <thead>
-        <tr>
-          <th data-key="prompt_text">Prompt</th>
-          <th data-key="engine">Engine</th>
-          <th data-key="mentioned">Mentioned</th>
-          <th data-key="position">Position</th>
-          <th data-key="recommended">Recommended</th>
-          <th data-key="mention_count"># Mentions</th>
-        </tr>
-      </thead>
+      <thead id="prompt-table-head"></thead>
       <tbody id="prompt-table-body"></tbody>
     </table>
   </div>
@@ -214,7 +228,25 @@ HTML_TEMPLATE = """<!doctype html>
 <script>
 const DATA = __DATA_JSON__;
 
+// Position -> visibility weight. Being named first is worth far more than being
+// buried last; "mentioned Y/N" alone hides that. Used by the Visibility score
+// share-of-voice mode.
+const POSITION_WEIGHT = { first: 1.0, early: 0.7, mid: 0.4, late: 0.2, not_mentioned: 0 };
+const GAPS = "__gaps__";
+
+const state = {
+  date: DATA.run_dates.length ? DATA.run_dates[DATA.run_dates.length - 1] : null,
+  view: DATA.brand_name,   // an entity name, or GAPS
+  sovMode: "count",
+  sortKey: null,
+  sortAsc: true,
+};
+
+let sovChart = null;
+
 function pct(x) { return x === null || x === undefined ? "—" : (x * 100).toFixed(0) + "%"; }
+
+function currentRows() { return DATA.runs[state.date] || []; }
 
 function renderHeadline() {
   const h = DATA.headline;
@@ -259,100 +291,267 @@ function renderTrend() {
   });
 }
 
+// Share-of-voice value per entity for the selected run, in either mode.
+function sovValues(mode) {
+  const totals = {};
+  DATA.entities.forEach(e => { totals[e] = 0; });
+  currentRows().forEach(row => {
+    DATA.entities.forEach(e => {
+      const m = row.mentions[e];
+      if (!m) return;
+      if (mode === "weighted") totals[e] += POSITION_WEIGHT[m.position] || 0;
+      else totals[e] += m.mention_count;
+    });
+  });
+  return DATA.entities.map(e => totals[e]);
+}
+
 function renderSov() {
   const ctx = document.getElementById("sov-chart");
-  const isBrand = DATA.share_of_voice.labels.map(l => l === DATA.brand_name);
-  new Chart(ctx, {
+  const isBrand = DATA.entities.map(l => l === DATA.brand_name);
+  const values = sovValues(state.sovMode);
+  const rounded = values.map(v => Math.round(v * 10) / 10);
+  if (sovChart) sovChart.destroy();
+  sovChart = new Chart(ctx, {
     type: "bar",
     data: {
-      labels: DATA.share_of_voice.labels,
+      labels: DATA.entities,
       datasets: [{
-        data: DATA.share_of_voice.counts,
+        data: rounded,
         backgroundColor: isBrand.map(b => b ? "#2563eb" : "#c7cad1"),
       }],
     },
     options: {
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { title: items => items[0].label,
+          label: item => state.sovMode === "weighted"
+            ? `Visibility score: ${item.raw}` : `Mentions: ${item.raw}` } },
+      },
       scales: { x: { ticks: { autoSkip: false, maxRotation: 40, minRotation: 0 } } },
     },
   });
 }
 
-let sortKey = null, sortAsc = true;
-
-function populateFilters() {
-  const engines = [...new Set(DATA.prompt_table.map(r => r.engine))].sort();
-  const sel = document.getElementById("filter-engine");
-  engines.forEach(e => {
-    const opt = document.createElement("option");
-    opt.value = e; opt.textContent = e;
-    sel.appendChild(opt);
-  });
+function posBadge(position) {
+  const cls = { first: "pos-first", early: "pos-early", mid: "pos-mid", late: "pos-late" }[position] || "no";
+  return `<span class="badge ${cls}">${position}</span>`;
 }
 
-function getFilteredRows() {
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Highlight brand name/aliases/domain inside the raw response so a reviewer
+// can eyeball parser accuracy at a glance (supports the "spot-check ~10
+// responses" success criterion).
+function highlightBrand(text) {
+  let html = escapeHtml(text);
+  const terms = (DATA.brand_terms || []).filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map(t => t.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"));
+  if (!terms.length) return html;
+  const re = new RegExp("(" + terms.join("|") + ")", "gi");
+  return html.replace(re, "<mark>$1</mark>");
+}
+
+// Build the flat rows the table renders, depending on the selected view.
+function tableModel() {
+  const rows = currentRows();
+  if (state.view === GAPS) {
+    const brand = DATA.brand_name;
+    const competitors = DATA.entities.filter(e => e !== brand);
+    const out = [];
+    rows.forEach(row => {
+      const brandM = row.mentions[brand];
+      if (brandM && brandM.mentioned) return;   // brand present -> not a gap
+      const present = competitors.filter(c => row.mentions[c] && row.mentions[c].mentioned);
+      if (!present.length) return;               // no competitor either -> skip
+      out.push({
+        prompt_id: row.prompt_id, prompt_text: row.prompt_text, engine: row.engine,
+        competitors: present.join(", "), raw_response: row.raw_response,
+      });
+    });
+    return { mode: "gaps", rows: out };
+  }
+  const entity = state.view;
+  const out = rows.map(row => {
+    const m = row.mentions[entity] || { mentioned: 0, position: "not_mentioned", is_recommended: 0, mention_count: 0 };
+    return {
+      prompt_id: row.prompt_id, prompt_text: row.prompt_text, engine: row.engine,
+      mentioned: m.mentioned ? "Y" : "N", position: m.position,
+      recommended: m.is_recommended ? "Y" : "N", mention_count: m.mention_count,
+      raw_response: row.raw_response,
+    };
+  });
+  return { mode: "entity", rows: out };
+}
+
+function applyFilters(rows) {
   const engine = document.getElementById("filter-engine").value;
   const mentioned = document.getElementById("filter-mentioned").value;
   const text = document.getElementById("filter-text").value.toLowerCase();
-  let rows = DATA.prompt_table.filter(r =>
+  let out = rows.filter(r =>
     (!engine || r.engine === engine) &&
     (!mentioned || r.mentioned === mentioned) &&
     (!text || r.prompt_text.toLowerCase().includes(text))
   );
-  if (sortKey) {
-    rows = rows.slice().sort((a, b) => {
-      let av = a[sortKey], bv = b[sortKey];
+  if (state.sortKey) {
+    out = out.slice().sort((a, b) => {
+      let av = a[state.sortKey], bv = b[state.sortKey];
       if (typeof av === "string") { av = av.toLowerCase(); bv = bv.toLowerCase(); }
-      if (av < bv) return sortAsc ? -1 : 1;
-      if (av > bv) return sortAsc ? 1 : -1;
+      if (av < bv) return state.sortAsc ? -1 : 1;
+      if (av > bv) return state.sortAsc ? 1 : -1;
       return 0;
     });
   }
-  return rows;
+  return out;
+}
+
+const COLS = {
+  entity: [
+    { key: "prompt_text", label: "Prompt" },
+    { key: "engine", label: "Engine" },
+    { key: "mentioned", label: "Mentioned" },
+    { key: "position", label: "Position" },
+    { key: "recommended", label: "Recommended" },
+    { key: "mention_count", label: "# Mentions" },
+  ],
+  gaps: [
+    { key: "prompt_text", label: "Prompt" },
+    { key: "engine", label: "Engine" },
+    { key: "competitors", label: "Competitors present" },
+  ],
+};
+
+function renderTableHead(mode) {
+  const thead = document.getElementById("prompt-table-head");
+  thead.innerHTML = "<tr>" + COLS[mode].map(c => `<th data-key="${c.key}">${c.label}</th>`).join("") + "</tr>";
+  thead.querySelectorAll("th[data-key]").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (state.sortKey === key) { state.sortAsc = !state.sortAsc; }
+      else { state.sortKey = key; state.sortAsc = true; }
+      renderTable();
+    });
+  });
+}
+
+function cellHtml(mode, r, key) {
+  if (key === "mentioned" || key === "recommended")
+    return `<span class="badge ${r[key] === 'Y' ? 'yes' : 'no'}">${r[key]}</span>`;
+  if (key === "position") return posBadge(r.position);
+  return escapeHtml(String(r[key]));
 }
 
 function renderTable() {
+  const model = tableModel();
+  renderTableHead(model.mode);
+  const colspan = COLS[model.mode].length;
+
+  const note = document.getElementById("table-note");
+  if (model.mode === "gaps") {
+    note.style.display = "block";
+    note.textContent = `Showing prompts where ${DATA.brand_name} is absent but at least one competitor appears — these are your content-gap targets.`;
+  } else {
+    note.style.display = "none";
+  }
+  document.getElementById("table-title").textContent =
+    model.mode === "gaps" ? "Content gaps — where a competitor appears and " + DATA.brand_name + " does not"
+                          : "Prompt-level detail — " + state.view;
+
+  // mentioned filter is meaningless in gaps mode
+  document.getElementById("filter-mentioned").disabled = model.mode === "gaps";
+
   const tbody = document.getElementById("prompt-table-body");
   tbody.innerHTML = "";
-  const rows = getFilteredRows();
-  rows.forEach((r, idx) => {
+  const rows = applyFilters(model.rows);
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${colspan}" style="color:#888;padding:16px;">No rows match.</td></tr>`;
+    return;
+  }
+
+  rows.forEach(r => {
     const tr = document.createElement("tr");
     tr.className = "data-row";
-    tr.innerHTML = `
-      <td>${r.prompt_text}</td>
-      <td>${r.engine}</td>
-      <td><span class="badge ${r.mentioned === 'Y' ? 'yes' : 'no'}">${r.mentioned}</span></td>
-      <td>${r.position}</td>
-      <td><span class="badge ${r.recommended === 'Y' ? 'yes' : 'no'}">${r.recommended}</span></td>
-      <td>${r.mention_count}</td>
-    `;
+    tr.innerHTML = COLS[model.mode].map(c => `<td>${cellHtml(model.mode, r, c.key)}</td>`).join("");
+
     const detailTr = document.createElement("tr");
     detailTr.className = "detail-row";
     detailTr.style.display = "none";
     const td = document.createElement("td");
-    td.colSpan = 6;
-    td.textContent = r.raw_response;
+    td.colSpan = colspan;
+    td.innerHTML = highlightBrand(r.raw_response || "");
     detailTr.appendChild(td);
 
     tr.addEventListener("click", () => {
       detailTr.style.display = detailTr.style.display === "none" ? "table-row" : "none";
     });
-
     tbody.appendChild(tr);
     tbody.appendChild(detailTr);
   });
 }
 
-document.querySelectorAll("th[data-key]").forEach(th => {
-  th.addEventListener("click", () => {
-    const key = th.dataset.key;
-    if (sortKey === key) { sortAsc = !sortAsc; } else { sortKey = key; sortAsc = true; }
-    renderTable();
+function exportCsv() {
+  const model = tableModel();
+  const rows = applyFilters(model.rows);
+  const cols = COLS[model.mode];
+  const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [cols.map(c => esc(c.label)).join(",")];
+  rows.forEach(r => lines.push(cols.map(c => esc(r[c.key])).join(",")));
+  const blob = new Blob([lines.join("\\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `citations_${state.date}_${state.view === GAPS ? "gaps" : state.view.replace(/\\s+/g, "_")}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function populateControls() {
+  const dateSel = document.getElementById("filter-date");
+  DATA.run_dates.slice().reverse().forEach(d => {
+    const o = document.createElement("option");
+    o.value = d; o.textContent = d;
+    dateSel.appendChild(o);
   });
-});
-document.getElementById("filter-engine").addEventListener("change", renderTable);
-document.getElementById("filter-mentioned").addEventListener("change", renderTable);
-document.getElementById("filter-text").addEventListener("input", renderTable);
+  dateSel.value = state.date;
+
+  const viewSel = document.getElementById("filter-view");
+  DATA.entities.forEach(e => {
+    const o = document.createElement("option");
+    o.value = e; o.textContent = e === DATA.brand_name ? e + " (brand)" : e;
+    viewSel.appendChild(o);
+  });
+  const gapOpt = document.createElement("option");
+  gapOpt.value = GAPS; gapOpt.textContent = "\\u26a0 Gaps (brand missing, competitor present)";
+  viewSel.appendChild(gapOpt);
+  viewSel.value = state.view;
+
+  const engines = [...new Set(currentRows().map(r => r.engine))].sort();
+  const engSel = document.getElementById("filter-engine");
+  engines.forEach(e => {
+    const o = document.createElement("option");
+    o.value = e; o.textContent = e;
+    engSel.appendChild(o);
+  });
+
+  dateSel.addEventListener("change", () => { state.date = dateSel.value; renderSov(); renderTable(); });
+  viewSel.addEventListener("change", () => { state.view = viewSel.value; state.sortKey = null; renderTable(); });
+  engSel.addEventListener("change", renderTable);
+  document.getElementById("filter-mentioned").addEventListener("change", renderTable);
+  document.getElementById("filter-text").addEventListener("input", renderTable);
+  document.getElementById("export-csv").addEventListener("click", exportCsv);
+
+  document.querySelectorAll("#sov-toggle button").forEach(b => {
+    b.addEventListener("click", () => {
+      state.sovMode = b.dataset.mode;
+      document.querySelectorAll("#sov-toggle button").forEach(x => x.classList.toggle("active", x === b));
+      renderSov();
+    });
+  });
+}
 
 if (!DATA.has_data) {
   document.getElementById("empty-state").style.display = "block";
@@ -360,8 +559,8 @@ if (!DATA.has_data) {
 } else {
   renderHeadline();
   renderTrend();
+  populateControls();
   renderSov();
-  populateFilters();
   renderTable();
 }
 </script>
@@ -382,12 +581,17 @@ def generate():
     from datetime import datetime
 
     entities = parser.load_entities()
-    brand_name = entities[0]["name"]
+    brand = entities[0]
+    brand_name = brand["name"]
+    entity_order = [e["name"] for e in entities]
+    brand_terms = [brand_name] + list(brand.get("aliases", []))
+    if brand.get("domain"):
+        brand_terms.append(brand["domain"])
 
     db.init_db()
     conn = db.get_connection()
     try:
-        data = build_data(conn, brand_name)
+        data = build_data(conn, brand_name, entity_order, brand_terms)
     finally:
         conn.close()
 
