@@ -36,12 +36,14 @@
   .full-width { grid-column: 1 / -1; }
   .empty-state { color: #888; font-size: 14px; padding: 20px 0; }
   canvas { max-height: 280px; }
+  .baseline-note { color: #666; font-size: 14px; line-height: 1.5; padding: 40px 8px; text-align: center; }
+  .baseline-big { font-size: 18px; font-weight: 600; color: #1c1e21; margin-bottom: 8px; }
 </style>
 </head>
 <body>
 
 <h1>University of North Alabama — AI Citation Tracker</h1>
-<div class="subtitle">Generated 2026-07-02 15:38</div>
+<div class="subtitle">Generated 2026-07-02 16:18</div>
 
 <div id="empty-state" class="empty-state" style="display:none;">
   No data yet. Run <code>src/runner.py</code> at least once to populate this dashboard.
@@ -57,6 +59,11 @@
     <div class="card">
       <h2>Mention rate trend by engine</h2>
       <canvas id="trend-chart"></canvas>
+      <div id="trend-baseline" class="baseline-note" style="display:none;">
+        <div class="baseline-big">Baseline week</div>
+        <div>This is your first run. The week-over-week trend line appears here
+        once a second run is collected.</div>
+      </div>
     </div>
     <div class="card">
       <h2>Share of voice (this run, mention count)</h2>
@@ -113,6 +120,13 @@ function renderHeadline() {
 
 function renderTrend() {
   const ctx = document.getElementById("trend-chart");
+  // With a single run there's no line to draw — a lone dot reads as broken.
+  // Show an intentional baseline note instead until a second run exists.
+  if (DATA.trend.dates.length < 2) {
+    ctx.style.display = "none";
+    document.getElementById("trend-baseline").style.display = "block";
+    return;
+  }
   const colors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c"];
   const datasets = Object.entries(DATA.trend.series).map(([engine, series], i) => ({
     label: engine,
