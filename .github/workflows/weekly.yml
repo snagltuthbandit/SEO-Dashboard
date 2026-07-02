@@ -30,12 +30,14 @@ jobs:
 
       - name: Collect responses and build dashboard
         env:
-          # Add OPENAI_API_KEY / PERPLEXITY_API_KEY as repo secrets and append
-          # them to the --engines list below to enable those engines.
+          # To add an engine: store its key as a repo secret, add the matching
+          # line here, and append the engine name to the --engines list below.
+          #   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          #   OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          #   PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python src/runner.py --engines gemini anthropic
+          python src/runner.py --engines gemini
           python src/dashboard.py
 
       - name: Commit updated data and dashboard
